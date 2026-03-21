@@ -47,4 +47,4 @@ Use tables where helpful. Be extremely precise — this could prevent a $50,000+
 
 # Footer for visa evidence
 st.markdown("---")
-st.caption("SupplyChainGPT-Audit • Open-source project by [Your Full Name] • Launched 2026 • https://github.com/YOURUSERNAME/SupplyChainGPT-Audit")
+st.caption("SupplyChainGPT-Audit • Open-source project by Sid Vithal • Launched 2026 • https://github.com/YOURUSERNAME/SupplyChainGPT-Audit")
