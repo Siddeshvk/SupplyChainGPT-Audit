@@ -1,0 +1,41 @@
+name: Keep SupplyChainGPT Awake
+
+on:
+  schedule:
+    - cron: '0 */8 * * *'   # Every 8 hours
+  workflow_dispatch:        # Allows manual trigger if needed
+
+jobs:
+  wake-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Wake up the app
+        run: |
+          npx playwright codegen --target python -o wake.py https://supplychaingpt.streamlit.app/ || true
+          # Simple script to visit and click wake button if present
+          python - <<EOF
+import time
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto("https://supplychaingpt.streamlit.app/", timeout=60000)
+    print("✅ Visited app")
+    
+    # Click wake button if it appears
+    if page.locator("text=Yes, get this app back up!").is_visible(timeout=10000):
+        page.click("text=Yes, get this app back up!")
+        print("✅ Clicked wake-up button")
+        time.sleep(30)  # Wait for boot
+    
+    page.screenshot(path="status.png")
+    browser.close()
+EOF
