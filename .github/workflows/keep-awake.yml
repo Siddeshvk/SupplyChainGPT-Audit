@@ -3,7 +3,7 @@ name: Keep SupplyChainGPT Awake
 on:
   schedule:
     - cron: '0 */8 * * *'   # Every 8 hours
-  workflow_dispatch:        # Click to test manually
+  workflow_dispatch:        # Manual test button
 
 jobs:
   wake-app:
@@ -29,34 +29,21 @@ with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
     
-    print("🌐 Visiting https://supplychaingpt.streamlit.app/")
+    print("🌐 Visiting your app...")
     page.goto("https://supplychaingpt.streamlit.app/", timeout=90000)
     time.sleep(10)
     
-    # Smart wake button — works even if text changes
-    clicked = False
-    for keyword in ["Yes", "open it", "Wake", "get this app back up", "inactive"]:
-        try:
-            btn = page.get_by_text(keyword, exact=False)
-            if btn.is_visible(timeout=8000):
-                btn.click()
-                print(f"✅ Clicked wake button with: {keyword}")
-                clicked = True
-                time.sleep(45)
-                break
-        except:
-            pass
-    
-    if not clicked:
-        # Fallback: click the big button if present
-        try:
-            page.locator("button").first.click()
-            print("✅ Fallback click successful")
-            time.sleep(45)
-        except:
-            print("App was already awake 👍")
+    content = page.content().lower()
+    if any(word in content for word in ["inactive", "sleep", "wake", "open it", "get this app back up"]):
+        print("😴 App was sleeping — waking it up")
+        # Click the wake button (works with any "Yes / Open / Wake" text)
+        page.get_by_text("Yes", exact=False).or_(page.get_by_text("open", exact=False)).or_(page.get_by_role("button")).first.click()
+        time.sleep(45)
+        print("✅ Wake button clicked!")
+    else:
+        print("👍 App was already awake")
     
     page.screenshot(path="status.png")
     browser.close()
-print("✅ Keep-alive workflow finished")
+print("✅ Keep-alive finished successfully")
           EOF
