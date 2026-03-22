@@ -2,8 +2,8 @@ name: Keep SupplyChainGPT Awake
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # Runs every 8 hours
-  workflow_dispatch:        # Lets you test it manually
+    - cron: '0 */8 * * *'   # Every 8 hours
+  workflow_dispatch:        # Click to test manually
 
 jobs:
   wake-app:
@@ -20,7 +20,8 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Wake up the app
-        run: python - <<'EOF'
+        run: |
+          python <<'EOF'
 import time
 from playwright.sync_api import sync_playwright
 
@@ -29,19 +30,33 @@ with sync_playwright() as p:
     page = browser.new_page()
     
     print("🌐 Visiting https://supplychaingpt.streamlit.app/")
-    page.goto("https://supplychaingpt.streamlit.app/", timeout=60000)
-    time.sleep(8)  # let page load
+    page.goto("https://supplychaingpt.streamlit.app/", timeout=90000)
+    time.sleep(10)
     
-    # Smart button click — catches "Yes, open it", "Wake up", "Yes" etc.
-    wake_button = page.locator("button").filter(has_text="open").or_(
-                  page.locator("button").filter(has_text="Wake")).or_(
-                  page.locator("button").filter(has_text="Yes"))
+    # Smart wake button — works even if text changes
+    clicked = False
+    for keyword in ["Yes", "open it", "Wake", "get this app back up", "inactive"]:
+        try:
+            btn = page.get_by_text(keyword, exact=False)
+            if btn.is_visible(timeout=8000):
+                btn.click()
+                print(f"✅ Clicked wake button with: {keyword}")
+                clicked = True
+                time.sleep(45)
+                break
+        except:
+            pass
     
-    if wake_button.count() > 0 and wake_button.first.is_visible(timeout=10000):
-        wake_button.first.click()
-        print("✅ Clicked wake button!")
-        time.sleep(40)  # wait for full boot
+    if not clicked:
+        # Fallback: click the big button if present
+        try:
+            page.locator("button").first.click()
+            print("✅ Fallback click successful")
+            time.sleep(45)
+        except:
+            print("App was already awake 👍")
     
     page.screenshot(path="status.png")
     browser.close()
-EOF
+print("✅ Keep-alive workflow finished")
+          EOF
