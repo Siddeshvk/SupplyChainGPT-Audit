@@ -2,8 +2,8 @@ name: Keep SupplyChainGPT Awake
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # Every 8 hours
-  workflow_dispatch:        # Manual test
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
 
 jobs:
   wake:
@@ -17,10 +17,5 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Playwright
-        run: |
-          pip install playwright
-          playwright install --with-deps chromium
-
-      - name: Run wake script
+      - name: Ping app
         run: python wake.py
