@@ -1,15 +1,14 @@
 import urllib.request
-import ssl
+import sys
 
-url = "https://supplychaingpt.streamlit.app/"
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
+URL = "https://supplychaingpt.streamlit.app/"
 
 try:
-    req = urllib.request.urlopen(url, context=ctx, timeout=60)
-    print(f"✅ App pinged successfully! Status: {req.status}")
+    req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as response:
+        status = response.getcode()
+        print(f"✅ Pinged {URL} — HTTP {status}")
 except Exception as e:
-    print(f"Ping sent (response: {e})")
-
-print("✅ Keep-alive finished")
+    print(f"⚠️ Could not reach {URL}: {e}")
+    # Exit 0 so the GitHub Action doesn't fail — app may just be waking up
+    sys.exit(0)
