@@ -1,6 +1,7 @@
 import streamlit as st
 from pypdf import PdfReader
-import google.generativeai as genai
+from google import genai                        # NEW SDK — uses stable v1 endpoint
+from google.genai import types
 from ddgs import DDGS
 from datetime import datetime
 from io import StringIO
@@ -9,33 +10,32 @@ import time
 
 st.set_page_config(page_title="SupplyChainGPT", page_icon="📦", layout="wide")
 
-# ====================== CONFIGURE GEMINI ONCE ======================
+# ====================== CONFIGURE GEMINI ONCE (new SDK) ======================
 try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 except Exception as e:
     st.error(f"❌ Failed to configure Gemini API. Check your Streamlit secret: {e}")
     st.stop()
 
+GEMINI_MODEL = "gemini-2.0-flash"   # Stable model on v1 endpoint
+
 # ====================== KNOWLEDGE BASE ======================
 knowledge_base = [
-    {"title": "Incoterms 2020 Overview", "category": "Incoterms", "content": "Incoterms 2020 are 11 rules by the International Chamber of Commerce that define buyer/seller responsibilities for delivery, risk transfer, costs, and insurance in international trade."},
-    {"title": "EXW - Ex Works", "category": "Incoterms", "content": "Seller makes goods available at their premises. Buyer handles loading, transport, insurance, export/import clearance, and all risks from seller's door."},
-    {"title": "FOB - Free on Board", "category": "Incoterms", "content": "Seller delivers goods on board the vessel at the named port. Risk transfers when goods are on board. Seller handles export clearance."},
-    {"title": "DDP - Delivered Duty Paid", "category": "Incoterms", "content": "Seller bears all costs and risks (including import duties, taxes, and customs clearance) until goods are delivered to buyer's premises."},
-    {"title": "CIF - Cost, Insurance and Freight", "category": "Incoterms", "content": "Seller pays for transport and insurance to the named port. Risk transfers when goods are on board the vessel."},
-    {"title": "US Customs & CMMC Compliance", "category": "Compliance", "content": "US imports require accurate HTS codes, valuation, country of origin, and ISF filing. Defense suppliers must meet CMMC 2.0."},
-    {"title": "EU Import Regulations", "category": "Compliance", "content": "EU requires CBAM reporting, TARIC codes, and proof of origin. Incoterms must align with Union Customs Code."},
-    {"title": "Common Bill of Lading Errors", "category": "Compliance", "content": "Frequent issues: mismatched Incoterms, missing seals, incorrect consignee, wrong HS codes."},
-    {"title": "Supply Chain Risk Management", "category": "Risk Management", "content": "Key risks include supplier bankruptcy, geopolitical events, port congestion, currency fluctuation."},
-    {"title": "Geopolitical Disruptions 2026", "category": "Risk Management", "content": "Red Sea/Suez issues, US-China tensions, and nearshoring trends are shifting global shipping routes."},
-    {"title": "Sustainability & ESG in Supply Chains", "category": "Sustainability", "content": "Buyers now demand Scope 3 carbon reporting. EU CSRD and US SEC climate rules are coming into force."},
-    {"title": "Digital Tools & Traceability", "category": "Logistics", "content": "Blockchain, IoT sensors, and AI forecasting reduce documentation errors by 70%."},
+    {"title": "Incoterms 2020 Overview",       "category": "Incoterms",        "content": "Incoterms 2020 are 11 rules by the International Chamber of Commerce that define buyer/seller responsibilities for delivery, risk transfer, costs, and insurance in international trade."},
+    {"title": "EXW - Ex Works",                "category": "Incoterms",        "content": "Seller makes goods available at their premises. Buyer handles loading, transport, insurance, export/import clearance, and all risks from seller's door."},
+    {"title": "FOB - Free on Board",           "category": "Incoterms",        "content": "Seller delivers goods on board the vessel at the named port. Risk transfers when goods are on board. Seller handles export clearance."},
+    {"title": "DDP - Delivered Duty Paid",     "category": "Incoterms",        "content": "Seller bears all costs and risks (including import duties, taxes, and customs clearance) until goods are delivered to buyer's premises."},
+    {"title": "CIF - Cost, Insurance and Freight", "category": "Incoterms",   "content": "Seller pays for transport and insurance to the named port. Risk transfers when goods are on board the vessel."},
+    {"title": "US Customs & CMMC Compliance",  "category": "Compliance",       "content": "US imports require accurate HTS codes, valuation, country of origin, and ISF filing. Defense suppliers must meet CMMC 2.0."},
+    {"title": "EU Import Regulations",         "category": "Compliance",       "content": "EU requires CBAM reporting, TARIC codes, and proof of origin. Incoterms must align with Union Customs Code."},
+    {"title": "Common Bill of Lading Errors",  "category": "Compliance",       "content": "Frequent issues: mismatched Incoterms, missing seals, incorrect consignee, wrong HS codes."},
+    {"title": "Supply Chain Risk Management",  "category": "Risk Management",  "content": "Key risks include supplier bankruptcy, geopolitical events, port congestion, currency fluctuation."},
+    {"title": "Geopolitical Disruptions 2026", "category": "Risk Management",  "content": "Red Sea/Suez issues, US-China tensions, and nearshoring trends are shifting global shipping routes."},
+    {"title": "Sustainability & ESG",          "category": "Sustainability",   "content": "Buyers now demand Scope 3 carbon reporting. EU CSRD and US SEC climate rules are coming into force."},
+    {"title": "Digital Tools & Traceability",  "category": "Logistics",        "content": "Blockchain, IoT sensors, and AI forecasting reduce documentation errors by 70%."},
 ]
 
-# ====================== FIX 1: KEYWORD SEARCH (no embedding API needed) ======================
-# Replaces the broken embedding-based search entirely.
-# No API calls, no quota, no version issues — pure Python keyword matching.
-
+# ====================== KEYWORD SEARCH (no embedding API needed) ======================
 def _keyword_score(query: str, doc: str) -> float:
     query_words = set(query.lower().split())
     doc_lower = doc.lower()
@@ -43,24 +43,18 @@ def _keyword_score(query: str, doc: str) -> float:
         return 0.0
     matches = sum(1 for w in query_words if w in doc_lower)
     phrase_bonus = 0.3 if query.lower() in doc_lower else 0.0
-    score = matches / len(query_words) + phrase_bonus
-    return min(score, 1.0)
+    return min(matches / len(query_words) + phrase_bonus, 1.0)
 
 
 def semantic_search(query, selected_categories, min_relevance, top_k=6):
+    filtered_kb = knowledge_base
     if selected_categories and "All" not in selected_categories:
-        filtered_kb = [item for item in knowledge_base if item["category"] in selected_categories]
-    else:
-        filtered_kb = knowledge_base
+        filtered_kb = [i for i in knowledge_base if i["category"] in selected_categories]
 
-    scored = []
-    for item in filtered_kb:
-        combined_text = f"{item['title']} {item['content']}"
-        score = _keyword_score(query, combined_text)
-        scored.append((item, score))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-
+    scored = sorted(
+        [( item, _keyword_score(query, f"{item['title']} {item['content']}") ) for item in filtered_kb],
+        key=lambda x: x[1], reverse=True
+    )
     results = []
     for item, score in scored[:top_k]:
         relevance = round(score * 100, 1)
@@ -71,38 +65,35 @@ def semantic_search(query, selected_categories, min_relevance, top_k=6):
     return results
 
 
-# ====================== FIX 3: GEMINI WITH RETRY ON 429 ======================
-# Switched to gemini-1.5-flash — higher free-tier limits than gemini-2.0-flash.
-# Added exponential backoff so temporary quota hits auto-recover.
-
-def call_gemini_with_retry(prompt: str, retries: int = 3) -> str:
-    model = genai.GenerativeModel("gemini-1.5-flash")
+# ====================== GEMINI CALL (new SDK) with retry ======================
+def call_gemini(prompt: str, retries: int = 3) -> str:
     for attempt in range(retries):
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt
+            )
             return response.text
         except Exception as e:
-            error_str = str(e)
-            if "429" in error_str or "quota" in error_str.lower():
-                wait = 2 ** attempt  # 1s, 2s, 4s
-                st.warning(f"⏳ Rate limit hit. Retrying in {wait}s... (attempt {attempt + 1}/{retries})")
+            err = str(e)
+            if "429" in err or "quota" in err.lower() or "resource" in err.lower():
+                wait = 2 ** attempt
+                st.warning(f"⏳ Rate limit hit. Retrying in {wait}s... ({attempt+1}/{retries})")
                 time.sleep(wait)
             else:
                 return f"❌ Gemini error: {e}"
-    return (
-        "❌ Gemini free-tier quota exceeded. "
-        "Wait ~1 minute and try again, or upgrade your plan at https://ai.google.dev/pricing"
-    )
+    return "❌ Gemini quota exceeded. Wait ~1 minute and retry, or upgrade at https://ai.google.dev/pricing"
 
 
+# ====================== AI FUNCTIONS ======================
 def generate_ai_insights(query, results):
     if not results:
-        return "No sufficiently relevant information found."
+        return "No relevant information found."
     context = "\n\n---\n\n".join([
         f"**{r['title']}** ({r['category']}, {r['relevance']}% relevant)\n{r['content']}"
         for r in results
     ])
-    prompt = f"""User query: "{query}"
+    return call_gemini(f"""User query: "{query}"
 Relevant knowledge:
 {context}
 Create a professional AI analysis in clean Markdown:
@@ -110,52 +101,38 @@ Create a professional AI analysis in clean Markdown:
 - **Key Insights**
 - **Potential Risks** (with severity)
 - **Trends & Opportunities**
-- **Recommended Actions** (3-5 practical steps)"""
-    return call_gemini_with_retry(prompt)
+- **Recommended Actions** (3-5 practical steps)""")
 
-
-# ====================== FIX 2: DDGS API CALL ======================
-# Old API: ddgs.text(keywords=query)  ← broke in ddgs >= 6.x
-# New API: ddgs.text(query)           ← query is now the first positional argument
 
 def real_time_web_search(query, max_results=6):
-    results = []
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+            return list(ddgs.text(query, max_results=max_results))
     except Exception as e:
         st.error(f"❌ Web search failed: {e}")
-    return results
+        return []
 
 
 def generate_web_insights(query, web_results):
     if not web_results:
         return "No recent web results found."
-    context = "\n\n".join([
-        f"**{r['title']}**\n{r['body']}\nSource: {r['href']}"
-        for r in web_results
-    ])
-    prompt = f"""User query: "{query}"
+    context = "\n\n".join([f"**{r['title']}**\n{r['body']}\nSource: {r['href']}" for r in web_results])
+    return call_gemini(f"""User query: "{query}"
 Latest web results:
 {context}
 Summarize in clean Markdown:
 - **Key Updates**
 - **Impact on SMEs**
-- **Recommended Actions**"""
-    return call_gemini_with_retry(prompt)
+- **Recommended Actions**""")
 
 
 def chat_with_memory(user_message):
-    history_text = "\n".join([
-        f"{msg['role']}: {msg['content']}"
-        for msg in st.session_state.chat_history
-    ])
-    prompt = f"""You are SupplyChainGPT, a senior supply chain expert.
+    history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
+    return call_gemini(f"""You are SupplyChainGPT, a senior supply chain expert.
 Previous conversation:
-{history_text}
+{history}
 New question: {user_message}
-Answer helpfully, accurately, and concisely."""
-    return call_gemini_with_retry(prompt)
+Answer helpfully, accurately, and concisely.""")
 
 
 def multi_document_audit(uploaded_files):
@@ -163,23 +140,20 @@ def multi_document_audit(uploaded_files):
     for file in uploaded_files:
         try:
             reader = PdfReader(file)
-            text = "".join(page.extract_text() or "" for page in reader.pages)
+            text = "".join(p.extract_text() or "" for p in reader.pages)
             texts.append(f"--- DOCUMENT: {file.name} ---\n{text[:6000]}")
         except Exception as e:
             st.warning(f"⚠️ Could not read {file.name}: {e}")
-
     if not texts:
         return "❌ No readable content found in the uploaded files."
-
     combined = "\n\n".join(texts)
-    prompt = f"""Analyze these {len(uploaded_files)} shipping documents:
+    return call_gemini(f"""Analyze these {len(uploaded_files)} shipping documents:
 {combined[:20000]}
 Output ONLY clean Markdown with:
 1. **Summary Table** (one row per document)
 2. **Cross-Document Comparison**
 3. **Overall Risk Rating**
-4. **Recommended Fixes**"""
-    return call_gemini_with_retry(prompt)
+4. **Recommended Fixes**""")
 
 
 # ====================== MAIN APP ======================
@@ -188,11 +162,12 @@ st.markdown("**Smart Search • Real-time News • Chat Memory • Multi-Doc Aud
 
 with st.sidebar:
     st.header("📦 Tools")
-    mode = st.radio(
-        "Choose tool:",
-        ["🔍 Smart Search", "🌐 Real-time Web Search", "💬 Chat with Memory", "📄 Multi-Document Auditor"],
-        label_visibility="collapsed"
-    )
+    mode = st.radio("Choose tool:", [
+        "🔍 Smart Search",
+        "🌐 Real-time Web Search",
+        "💬 Chat with Memory",
+        "📄 Multi-Document Auditor"
+    ], label_visibility="collapsed")
     st.divider()
     if mode == "🔍 Smart Search":
         advanced_mode = st.checkbox("Advanced Mode (AI Insights)", value=True)
@@ -200,7 +175,6 @@ with st.sidebar:
 # ====================== SMART SEARCH ======================
 if mode == "🔍 Smart Search":
     st.subheader("🔍 Ask anything about supply chains, Incoterms, compliance, or logistics")
-
     st.caption("💡 Try these:")
     cols = st.columns(4)
     suggestions = [
@@ -215,11 +189,9 @@ if mode == "🔍 Smart Search":
             st.session_state.trigger_search = True
             st.rerun()
 
-    query = st.text_input(
-        "Your supply chain question:",
-        placeholder="e.g. What are the risks of using EXW for international shipments?",
-        key="search_query"
-    )
+    query = st.text_input("Your supply chain question:",
+                          placeholder="e.g. What are the risks of using EXW for international shipments?",
+                          key="search_query")
 
     if st.button("🔍 Search", type="primary", use_container_width=True) or st.session_state.get("trigger_search", False):
         if "trigger_search" in st.session_state:
@@ -259,23 +231,18 @@ if mode == "🔍 Smart Search":
                 writer.writerow(["Title", "Category", "Relevance (%)", "Content"])
                 for r in results:
                     writer.writerow([r["title"], r["category"], r["relevance"], r["content"]])
-                st.download_button(
-                    "📥 Export Results as CSV",
-                    data=output.getvalue(),
-                    file_name=f"supplychain_search_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    mime="text/csv"
-                )
+                st.download_button("📥 Export Results as CSV", data=output.getvalue(),
+                                   file_name=f"supplychain_search_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                   mime="text/csv")
             else:
                 st.info("No results found. Try keywords like 'DDP', 'customs', 'risk', 'FOB', etc.")
 
 # ====================== REAL-TIME WEB SEARCH ======================
 elif mode == "🌐 Real-time Web Search":
     st.subheader("🌐 Real-time Supply Chain News & Disruptions")
-    query = st.text_input(
-        "What disruptions or news are you tracking?",
-        placeholder="e.g. Red Sea shipping disruptions March 2026",
-        key="web_query"
-    )
+    query = st.text_input("What disruptions or news are you tracking?",
+                          placeholder="e.g. Red Sea shipping disruptions March 2026",
+                          key="web_query")
     if st.button("🔎 Search Web", type="primary", use_container_width=True):
         if not query.strip():
             st.warning("Please enter a search query.")
@@ -299,11 +266,9 @@ elif mode == "💬 Chat with Memory":
     st.subheader("💬 Chat with SupplyChainGPT")
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
-
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-
     if prompt := st.chat_input("Ask about Incoterms, risks, compliance..."):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -317,22 +282,15 @@ elif mode == "💬 Chat with Memory":
 # ====================== MULTI-DOCUMENT AUDITOR ======================
 else:
     st.subheader("📄 Multi-Document Auditor + Comparison")
-    uploaded_files = st.file_uploader(
-        "Upload one or more PDF documents",
-        type="pdf",
-        accept_multiple_files=True
-    )
+    uploaded_files = st.file_uploader("Upload one or more PDF documents", type="pdf", accept_multiple_files=True)
     if uploaded_files and st.button("🔍 Analyze & Compare All Documents", type="primary", use_container_width=True):
         with st.spinner("Analyzing documents..."):
             report = multi_document_audit(uploaded_files)
         st.markdown("### 📋 Multi-Document Audit & Comparison Report")
         st.markdown(report)
-        st.download_button(
-            "📥 Download Full Report",
-            data=report,
-            file_name=f"multi_audit_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-            mime="text/markdown"
-        )
+        st.download_button("📥 Download Full Report", data=report,
+                           file_name=f"multi_audit_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+                           mime="text/markdown")
 
 st.divider()
 st.caption("SupplyChainGPT v3 • Real-time + Chat + Multi-Doc • Open-source • Built by Sid Vithal • 2026")
