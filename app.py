@@ -9,7 +9,10 @@ import csv
 st.set_page_config(page_title="SupplyChainGPT", page_icon="📦", layout="wide")
 st.markdown("""
     <style>
-    a[href*="github.com"] { display: none !important; }
+    [data-testid="stToolbarActionButtonIcon"] { display: none !important; }
+    button[kind="header"] { display: none !important; }
+    .stToolbar a[href*="github"] { display: none !important; }
+    header [data-testid="stBaseButton-header"] { display: none !important; }
     </style>
 """, unsafe_allow_html=True)
 # ====================== GROQ CLIENT (free tier: 30 req/min, 14,400/day) ======================
