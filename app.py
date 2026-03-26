@@ -1,6 +1,6 @@
 import streamlit as st
 from pypdf import PdfReader
-from google import genai                        # NEW SDK — uses stable v1 endpoint
+from google import genai
 from google.genai import types
 from ddgs import DDGS
 from datetime import datetime
@@ -10,32 +10,33 @@ import time
 
 st.set_page_config(page_title="SupplyChainGPT", page_icon="📦", layout="wide")
 
-# ====================== CONFIGURE GEMINI ONCE (new SDK) ======================
+# ====================== CONFIGURE GEMINI ONCE ======================
 try:
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 except Exception as e:
     st.error(f"❌ Failed to configure Gemini API. Check your Streamlit secret: {e}")
     st.stop()
 
-GEMINI_MODEL = "gemini-2.0-flash"   # Stable model on v1 endpoint
+# gemini-2.0-flash-lite: free tier = 30 RPM / 1500 RPD (2x more than flash)
+GEMINI_MODEL = "gemini-2.0-flash-lite"
 
 # ====================== KNOWLEDGE BASE ======================
 knowledge_base = [
-    {"title": "Incoterms 2020 Overview",       "category": "Incoterms",        "content": "Incoterms 2020 are 11 rules by the International Chamber of Commerce that define buyer/seller responsibilities for delivery, risk transfer, costs, and insurance in international trade."},
-    {"title": "EXW - Ex Works",                "category": "Incoterms",        "content": "Seller makes goods available at their premises. Buyer handles loading, transport, insurance, export/import clearance, and all risks from seller's door."},
-    {"title": "FOB - Free on Board",           "category": "Incoterms",        "content": "Seller delivers goods on board the vessel at the named port. Risk transfers when goods are on board. Seller handles export clearance."},
-    {"title": "DDP - Delivered Duty Paid",     "category": "Incoterms",        "content": "Seller bears all costs and risks (including import duties, taxes, and customs clearance) until goods are delivered to buyer's premises."},
-    {"title": "CIF - Cost, Insurance and Freight", "category": "Incoterms",   "content": "Seller pays for transport and insurance to the named port. Risk transfers when goods are on board the vessel."},
-    {"title": "US Customs & CMMC Compliance",  "category": "Compliance",       "content": "US imports require accurate HTS codes, valuation, country of origin, and ISF filing. Defense suppliers must meet CMMC 2.0."},
-    {"title": "EU Import Regulations",         "category": "Compliance",       "content": "EU requires CBAM reporting, TARIC codes, and proof of origin. Incoterms must align with Union Customs Code."},
-    {"title": "Common Bill of Lading Errors",  "category": "Compliance",       "content": "Frequent issues: mismatched Incoterms, missing seals, incorrect consignee, wrong HS codes."},
-    {"title": "Supply Chain Risk Management",  "category": "Risk Management",  "content": "Key risks include supplier bankruptcy, geopolitical events, port congestion, currency fluctuation."},
-    {"title": "Geopolitical Disruptions 2026", "category": "Risk Management",  "content": "Red Sea/Suez issues, US-China tensions, and nearshoring trends are shifting global shipping routes."},
-    {"title": "Sustainability & ESG",          "category": "Sustainability",   "content": "Buyers now demand Scope 3 carbon reporting. EU CSRD and US SEC climate rules are coming into force."},
-    {"title": "Digital Tools & Traceability",  "category": "Logistics",        "content": "Blockchain, IoT sensors, and AI forecasting reduce documentation errors by 70%."},
+    {"title": "Incoterms 2020 Overview",           "category": "Incoterms",       "content": "Incoterms 2020 are 11 rules by the International Chamber of Commerce that define buyer/seller responsibilities for delivery, risk transfer, costs, and insurance in international trade."},
+    {"title": "EXW - Ex Works",                    "category": "Incoterms",       "content": "Seller makes goods available at their premises. Buyer handles loading, transport, insurance, export/import clearance, and all risks from seller's door."},
+    {"title": "FOB - Free on Board",               "category": "Incoterms",       "content": "Seller delivers goods on board the vessel at the named port. Risk transfers when goods are on board. Seller handles export clearance."},
+    {"title": "DDP - Delivered Duty Paid",         "category": "Incoterms",       "content": "Seller bears all costs and risks (including import duties, taxes, and customs clearance) until goods are delivered to buyer's premises."},
+    {"title": "CIF - Cost, Insurance and Freight", "category": "Incoterms",       "content": "Seller pays for transport and insurance to the named port. Risk transfers when goods are on board the vessel."},
+    {"title": "US Customs & CMMC Compliance",      "category": "Compliance",      "content": "US imports require accurate HTS codes, valuation, country of origin, and ISF filing. Defense suppliers must meet CMMC 2.0."},
+    {"title": "EU Import Regulations",             "category": "Compliance",      "content": "EU requires CBAM reporting, TARIC codes, and proof of origin. Incoterms must align with Union Customs Code."},
+    {"title": "Common Bill of Lading Errors",      "category": "Compliance",      "content": "Frequent issues: mismatched Incoterms, missing seals, incorrect consignee, wrong HS codes."},
+    {"title": "Supply Chain Risk Management",      "category": "Risk Management", "content": "Key risks include supplier bankruptcy, geopolitical events, port congestion, currency fluctuation."},
+    {"title": "Geopolitical Disruptions 2026",     "category": "Risk Management", "content": "Red Sea/Suez issues, US-China tensions, and nearshoring trends are shifting global shipping routes."},
+    {"title": "Sustainability & ESG",              "category": "Sustainability",  "content": "Buyers now demand Scope 3 carbon reporting. EU CSRD and US SEC climate rules are coming into force."},
+    {"title": "Digital Tools & Traceability",      "category": "Logistics",       "content": "Blockchain, IoT sensors, and AI forecasting reduce documentation errors by 70%."},
 ]
 
-# ====================== KEYWORD SEARCH (no embedding API needed) ======================
+# ====================== KEYWORD SEARCH ======================
 def _keyword_score(query: str, doc: str) -> float:
     query_words = set(query.lower().split())
     doc_lower = doc.lower()
@@ -50,9 +51,8 @@ def semantic_search(query, selected_categories, min_relevance, top_k=6):
     filtered_kb = knowledge_base
     if selected_categories and "All" not in selected_categories:
         filtered_kb = [i for i in knowledge_base if i["category"] in selected_categories]
-
     scored = sorted(
-        [( item, _keyword_score(query, f"{item['title']} {item['content']}") ) for item in filtered_kb],
+        [(item, _keyword_score(query, f"{item['title']} {item['content']}")) for item in filtered_kb],
         key=lambda x: x[1], reverse=True
     )
     results = []
@@ -65,9 +65,12 @@ def semantic_search(query, selected_categories, min_relevance, top_k=6):
     return results
 
 
-# ====================== GEMINI CALL (new SDK) with retry ======================
-def call_gemini(prompt: str, retries: int = 3) -> str:
-    for attempt in range(retries):
+# ====================== GEMINI CALL WITH SMART RETRY ======================
+# Retry delays: 15s → 30s → 60s (free tier resets per minute, so waiting helps)
+RETRY_DELAYS = [15, 30, 60]
+
+def call_gemini(prompt: str) -> str:
+    for attempt, wait in enumerate(RETRY_DELAYS):
         try:
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
@@ -76,16 +79,27 @@ def call_gemini(prompt: str, retries: int = 3) -> str:
             return response.text
         except Exception as e:
             err = str(e)
-            if "429" in err or "quota" in err.lower() or "resource" in err.lower():
-                wait = 2 ** attempt
-                st.warning(f"⏳ Rate limit hit. Retrying in {wait}s... ({attempt+1}/{retries})")
+            is_quota = "429" in err or "quota" in err.lower() or "resource" in err.lower() or "exhausted" in err.lower()
+            if is_quota and attempt < len(RETRY_DELAYS) - 1:
+                st.warning(f"⏳ API rate limit hit — waiting {wait}s before retry {attempt + 2}/{len(RETRY_DELAYS) + 1}...")
                 time.sleep(wait)
+            elif is_quota:
+                # All retries exhausted
+                st.error(
+                    "🚫 **Gemini free-tier daily quota exhausted.**\n\n"
+                    "**Quick fix (2 minutes):**\n"
+                    "1. Go to [Google AI Studio](https://aistudio.google.com/apikey)\n"
+                    "2. Click your API key → **Enable billing** (pay-as-you-go)\n"
+                    "3. Cost is ~$0.00015 per 1K tokens — a full day of heavy use costs pennies\n\n"
+                    "Or wait until tomorrow — free quota resets daily at midnight UTC."
+                )
+                return "❌ Quota exceeded. See the error above for how to fix this."
             else:
                 return f"❌ Gemini error: {e}"
-    return "❌ Gemini quota exceeded. Wait ~1 minute and retry, or upgrade at https://ai.google.dev/pricing"
+    return "❌ All retries failed."
 
 
-# ====================== AI FUNCTIONS ======================
+# ====================== APP FUNCTIONS ======================
 def generate_ai_insights(query, results):
     if not results:
         return "No relevant information found."
