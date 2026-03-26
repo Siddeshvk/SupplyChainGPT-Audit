@@ -1,3 +1,11 @@
+import traceback
+
+# In your search button handler, wrap like:
+try:
+    results = semantic_search(query, ["All"], 60)
+except Exception as e:
+    st.error(f"Error: {e}")
+    st.code(traceback.format_exc())
 import streamlit as st
 from pypdf import PdfReader
 import google.generativeai as genai
