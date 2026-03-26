@@ -5,6 +5,7 @@ from ddgs import DDGS
 from datetime import datetime
 from io import StringIO
 import csv
+import time
 
 st.set_page_config(page_title="SupplyChainGPT", page_icon="📦", layout="wide")
 
@@ -12,7 +13,7 @@ st.set_page_config(page_title="SupplyChainGPT", page_icon="📦", layout="wide")
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 except Exception as e:
-    st.error(f"❌ Failed to configure Gemini API. Check your secret key: {e}")
+    st.error(f"❌ Failed to configure Gemini API. Check your Streamlit secret: {e}")
     st.stop()
 
 # ====================== KNOWLEDGE BASE ======================
@@ -26,75 +27,72 @@ knowledge_base = [
     {"title": "EU Import Regulations", "category": "Compliance", "content": "EU requires CBAM reporting, TARIC codes, and proof of origin. Incoterms must align with Union Customs Code."},
     {"title": "Common Bill of Lading Errors", "category": "Compliance", "content": "Frequent issues: mismatched Incoterms, missing seals, incorrect consignee, wrong HS codes."},
     {"title": "Supply Chain Risk Management", "category": "Risk Management", "content": "Key risks include supplier bankruptcy, geopolitical events, port congestion, currency fluctuation."},
-    {"title": "Geopolitical Disruptions 2026", "category": "Risk Management", "content": "Red Sea/Suez issues, US-China tensions, and nearshoring trends are shifting routes."},
-    {"title": "Sustainability & ESG in Supply Chains", "category": "Sustainability", "content": "Buyers now demand Scope 3 carbon reporting. EU CSRD and US SEC climate rules are coming."},
+    {"title": "Geopolitical Disruptions 2026", "category": "Risk Management", "content": "Red Sea/Suez issues, US-China tensions, and nearshoring trends are shifting global shipping routes."},
+    {"title": "Sustainability & ESG in Supply Chains", "category": "Sustainability", "content": "Buyers now demand Scope 3 carbon reporting. EU CSRD and US SEC climate rules are coming into force."},
     {"title": "Digital Tools & Traceability", "category": "Logistics", "content": "Blockchain, IoT sensors, and AI forecasting reduce documentation errors by 70%."},
 ]
 
-# ====================== HELPER FUNCTIONS ======================
-def cosine_similarity(vec1, vec2):
-    dot = sum(a * b for a, b in zip(vec1, vec2))
-    norm1 = sum(a * a for a in vec1) ** 0.5
-    norm2 = sum(b * b for b in vec2) ** 0.5
-    if norm1 == 0 or norm2 == 0:
+# ====================== FIX 1: KEYWORD SEARCH (no embedding API needed) ======================
+# Replaces the broken embedding-based search entirely.
+# No API calls, no quota, no version issues — pure Python keyword matching.
+
+def _keyword_score(query: str, doc: str) -> float:
+    query_words = set(query.lower().split())
+    doc_lower = doc.lower()
+    if not query_words:
         return 0.0
-    return dot / (norm1 * norm2)
-
-
-# FIX 1: Updated embedding model from deprecated "embedding-001" to "text-embedding-004"
-@st.cache_data(show_spinner=False)
-def get_embeddings():
-    embeddings = []
-    for item in knowledge_base:
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=f"{item['title']}. {item['content']}",
-            task_type="retrieval_document"
-        )
-        embeddings.append(result["embedding"])
-    return embeddings
+    matches = sum(1 for w in query_words if w in doc_lower)
+    phrase_bonus = 0.3 if query.lower() in doc_lower else 0.0
+    score = matches / len(query_words) + phrase_bonus
+    return min(score, 1.0)
 
 
 def semantic_search(query, selected_categories, min_relevance, top_k=6):
-    try:
-        embeddings = get_embeddings()
-    except Exception as e:
-        st.error(f"❌ Failed to load knowledge base embeddings: {e}")
-        return []
-
     if selected_categories and "All" not in selected_categories:
-        filtered_indices = [i for i, item in enumerate(knowledge_base) if item["category"] in selected_categories]
+        filtered_kb = [item for item in knowledge_base if item["category"] in selected_categories]
     else:
-        filtered_indices = list(range(len(knowledge_base)))
-
-    filtered_kb = [knowledge_base[i] for i in filtered_indices]
-    filtered_emb = [embeddings[i] for i in filtered_indices]
-
-    try:
-        # FIX 1 (continued): Same updated embedding model for query
-        q_result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=query,
-            task_type="retrieval_query"
-        )
-        q_emb = q_result["embedding"]
-    except Exception as e:
-        st.error(f"❌ Failed to embed your query: {e}")
-        return []
+        filtered_kb = knowledge_base
 
     scored = []
-    for i, emb in enumerate(filtered_emb):
-        score = cosine_similarity(q_emb, emb)
-        scored.append((i, score))
+    for item in filtered_kb:
+        combined_text = f"{item['title']} {item['content']}"
+        score = _keyword_score(query, combined_text)
+        scored.append((item, score))
+
     scored.sort(key=lambda x: x[1], reverse=True)
 
     results = []
-    for idx, score in scored[:top_k]:
-        if score * 100 >= min_relevance:
-            item = filtered_kb[idx].copy()
-            item["relevance"] = round(score * 100, 1)
-            results.append(item)
+    for item, score in scored[:top_k]:
+        relevance = round(score * 100, 1)
+        if relevance >= min_relevance:
+            r = item.copy()
+            r["relevance"] = relevance
+            results.append(r)
     return results
+
+
+# ====================== FIX 3: GEMINI WITH RETRY ON 429 ======================
+# Switched to gemini-1.5-flash — higher free-tier limits than gemini-2.0-flash.
+# Added exponential backoff so temporary quota hits auto-recover.
+
+def call_gemini_with_retry(prompt: str, retries: int = 3) -> str:
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    for attempt in range(retries):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "quota" in error_str.lower():
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                st.warning(f"⏳ Rate limit hit. Retrying in {wait}s... (attempt {attempt + 1}/{retries})")
+                time.sleep(wait)
+            else:
+                return f"❌ Gemini error: {e}"
+    return (
+        "❌ Gemini free-tier quota exceeded. "
+        "Wait ~1 minute and try again, or upgrade your plan at https://ai.google.dev/pricing"
+    )
 
 
 def generate_ai_insights(query, results):
@@ -104,9 +102,7 @@ def generate_ai_insights(query, results):
         f"**{r['title']}** ({r['category']}, {r['relevance']}% relevant)\n{r['content']}"
         for r in results
     ])
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        prompt = f"""User query: "{query}"
+    prompt = f"""User query: "{query}"
 Relevant knowledge:
 {context}
 Create a professional AI analysis in clean Markdown:
@@ -115,18 +111,18 @@ Create a professional AI analysis in clean Markdown:
 - **Potential Risks** (with severity)
 - **Trends & Opportunities**
 - **Recommended Actions** (3-5 practical steps)"""
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ AI insight generation failed: {e}"
+    return call_gemini_with_retry(prompt)
 
 
-# FIX 2: Removed bare except — now shows real errors
+# ====================== FIX 2: DDGS API CALL ======================
+# Old API: ddgs.text(keywords=query)  ← broke in ddgs >= 6.x
+# New API: ddgs.text(query)           ← query is now the first positional argument
+
 def real_time_web_search(query, max_results=6):
     results = []
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(keywords=query, max_results=max_results))
+            results = list(ddgs.text(query, max_results=max_results))
     except Exception as e:
         st.error(f"❌ Web search failed: {e}")
     return results
@@ -139,19 +135,14 @@ def generate_web_insights(query, web_results):
         f"**{r['title']}**\n{r['body']}\nSource: {r['href']}"
         for r in web_results
     ])
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        prompt = f"""User query: "{query}"
+    prompt = f"""User query: "{query}"
 Latest web results:
 {context}
 Summarize in clean Markdown:
 - **Key Updates**
 - **Impact on SMEs**
 - **Recommended Actions**"""
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ Web insight generation failed: {e}"
+    return call_gemini_with_retry(prompt)
 
 
 def chat_with_memory(user_message):
@@ -159,17 +150,12 @@ def chat_with_memory(user_message):
         f"{msg['role']}: {msg['content']}"
         for msg in st.session_state.chat_history
     ])
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        prompt = f"""You are SupplyChainGPT, a senior supply chain expert.
+    prompt = f"""You are SupplyChainGPT, a senior supply chain expert.
 Previous conversation:
 {history_text}
 New question: {user_message}
 Answer helpfully, accurately, and concisely."""
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ Chat failed: {e}"
+    return call_gemini_with_retry(prompt)
 
 
 def multi_document_audit(uploaded_files):
@@ -186,19 +172,14 @@ def multi_document_audit(uploaded_files):
         return "❌ No readable content found in the uploaded files."
 
     combined = "\n\n".join(texts)
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        prompt = f"""Analyze these {len(uploaded_files)} shipping documents:
+    prompt = f"""Analyze these {len(uploaded_files)} shipping documents:
 {combined[:20000]}
 Output ONLY clean Markdown with:
 1. **Summary Table** (one row per document)
 2. **Cross-Document Comparison**
 3. **Overall Risk Rating**
 4. **Recommended Fixes**"""
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"❌ Document audit failed: {e}"
+    return call_gemini_with_retry(prompt)
 
 
 # ====================== MAIN APP ======================
@@ -247,7 +228,7 @@ if mode == "🔍 Smart Search":
             st.warning("Please enter a question.")
         else:
             with st.spinner("Searching knowledge base..."):
-                results = semantic_search(query, ["All"], 60)
+                results = semantic_search(query, ["All"], 10)
 
             if "search_history" not in st.session_state:
                 st.session_state.search_history = []
@@ -273,7 +254,6 @@ if mode == "🔍 Smart Search":
                     st.subheader("🤖 AI-Powered Insights & Analysis")
                     st.markdown(insights)
 
-                # Export CSV
                 output = StringIO()
                 writer = csv.writer(output)
                 writer.writerow(["Title", "Category", "Relevance (%)", "Content"])
@@ -286,7 +266,7 @@ if mode == "🔍 Smart Search":
                     mime="text/csv"
                 )
             else:
-                st.info("No results above relevance threshold. Try rephrasing your question.")
+                st.info("No results found. Try keywords like 'DDP', 'customs', 'risk', 'FOB', etc.")
 
 # ====================== REAL-TIME WEB SEARCH ======================
 elif mode == "🌐 Real-time Web Search":
@@ -343,7 +323,7 @@ else:
         accept_multiple_files=True
     )
     if uploaded_files and st.button("🔍 Analyze & Compare All Documents", type="primary", use_container_width=True):
-        with st.spinner("Analyzing and comparing documents..."):
+        with st.spinner("Analyzing documents..."):
             report = multi_document_audit(uploaded_files)
         st.markdown("### 📋 Multi-Document Audit & Comparison Report")
         st.markdown(report)
