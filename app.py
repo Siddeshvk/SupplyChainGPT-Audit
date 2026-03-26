@@ -7,7 +7,7 @@ import csv
 st.set_page_config(page_title="SupplyChainGPT", page_icon="📦", layout="wide")
 
 # ====================== KNOWLEDGE BASE (EASY TO MAINTAIN) ======================
-# Add or edit entries here. No coding needed beyond copy-paste.
+# Add or edit entries here. No coding needed beyond copy-paste
 knowledge_base = [
     {
         "title": "Incoterms 2020 Overview",
