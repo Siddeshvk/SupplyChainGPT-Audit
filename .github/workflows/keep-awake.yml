@@ -1,19 +1,21 @@
 name: Keep SupplyChainGPT Awake
+
 on:
   schedule:
-    - cron: '0 */8 * * *'
-  workflow_dispatch:
+    - cron: '0 */8 * * *'   # Every 8 hours
+  workflow_dispatch:         # Manual trigger from GitHub UI
+
 jobs:
   wake:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Ping app
         run: python wake.py
