@@ -2,12 +2,16 @@ name: Keep SupplyChainGPT Awake
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # Every 8 hours
-  workflow_dispatch:         # Manual trigger from GitHub UI
+    - cron: '0 */6 * * *'   # Every 6 hours
+  workflow_dispatch:         # Lets you run it manually from the Actions tab
+
+permissions:
+  contents: write            # Needed for the heartbeat commit below
 
 jobs:
   wake:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,5 +21,32 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Ping app
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright
+          python -m playwright install chromium --with-deps
+
+      - name: Wake the app (real browser)
         run: python wake.py
+
+      - name: Heartbeat (keeps this schedule from being disabled by GitHub)
+        run: |
+          if [ -f .keepalive ]; then
+            last=$(cat .keepalive)
+            last_epoch=$(date -d "$last" +%s 2>/dev/null || echo 0)
+          else
+            last_epoch=0
+          fi
+          now_epoch=$(date -u +%s)
+          age_days=$(( (now_epoch - last_epoch) / 86400 ))
+          if [ "$age_days" -ge 10 ]; then
+            date -u +"%Y-%m-%dT%H:%M:%SZ" > .keepalive
+            git config user.name  "keepalive-bot"
+            git config user.email "keepalive-bot@users.noreply.github.com"
+            git add .keepalive
+            git commit -m "chore: keepalive heartbeat [skip ci]"
+            git push
+            echo "Heartbeat committed (resets the 60-day timer)."
+          else
+            echo "Heartbeat is $age_days days old - no commit needed."
+          fi
